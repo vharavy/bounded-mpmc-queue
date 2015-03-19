@@ -1,5 +1,5 @@
 [package]
 
-name = "MPMCQueue"
+name = "mpmc"
 version = "0.0.1"
 authors = ["Vitali Haravy <HumaneProgrammer@gmail.com>"]
