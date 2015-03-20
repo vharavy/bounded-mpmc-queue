@@ -2,18 +2,17 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::cell::UnsafeCell;
-use std::mem;
 
 struct Node<T> {
     ticket: AtomicUsize,
-    data: Option<T>
+    data: UnsafeCell<Option<T>>
 }
 
 impl<T> Node<T> {
     fn new(ticket: usize) -> Node<T> {
         Node {
             ticket: AtomicUsize::new(ticket),
-            data: None
+            data: UnsafeCell::new(None)
         }
     }
 }
@@ -25,8 +24,11 @@ pub struct Queue<T> {
     dequeue_index: AtomicUsize
 }
 
+unsafe impl<T: Send> Send for Queue<T> { }
+unsafe impl<T: Send> Sync for Queue<T> { }
+
 impl<T> Queue<T> {
-    fn new(bound: usize) -> Queue<T> {
+    pub fn new(bound: usize) -> Queue<T> {
         assert!(bound >= 2);
         assert_eq!(bound & (bound - 1), 0);
 
@@ -46,11 +48,13 @@ impl<T> Queue<T> {
     pub fn enqueue(&mut self, item: T) -> bool {
         let mut index = self.enqueue_index.load(Ordering::Relaxed);
         loop {
-            let mut cell = &self.buffer[index & self.mask];
+            let cell = &mut self.buffer[index & self.mask];
             let ticket = cell.ticket.load(Ordering::Acquire);
             if ticket == index {
                 if index == self.enqueue_index.compare_and_swap(index, index + 1, Ordering::Relaxed) {
-                    mem::replace(cell.data, Some(item));
+                    unsafe {
+                        *cell.data.get() = Some(item);
+                    }
                     cell.ticket.store(index + 1, Ordering::Relaxed);
                     return true;
                 }
@@ -69,7 +73,9 @@ impl<T> Queue<T> {
             let ticket = cell.ticket.load(Ordering::Acquire);
             if ticket == index + 1 {
                 if index == self.dequeue_index.compare_and_swap(index, index + 1, Ordering::Relaxed) {
-                    let data = cell.data.take();
+                    let data = unsafe {
+                        (*cell.data.get()).take()
+                    };
                     cell.ticket.store(index + self.mask + 1, Ordering::Release);
                     return data;
                 }
