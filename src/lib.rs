@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::cell::UnsafeCell;
 
@@ -45,7 +43,7 @@ impl<T> Queue<T> {
         }
     }
 
-    pub fn enqueue(&mut self, item: T) -> bool {
+    pub fn try_enqueue(&mut self, item: T) -> bool {
         let mut index = self.enqueue_index.load(Ordering::Relaxed);
         loop {
             let cell = &mut self.buffer[index & self.mask];
@@ -66,7 +64,7 @@ impl<T> Queue<T> {
         }
     }
 
-    pub fn dequeue(&mut self) -> Option<T> {
+    pub fn try_dequeue(&mut self) -> Option<T> {
         let mut index = self.dequeue_index.load(Ordering::Relaxed);
         loop {
             let cell = &self.buffer[index & self.mask];
@@ -84,6 +82,44 @@ impl<T> Queue<T> {
             } else {
                 index = self.dequeue_index.load(Ordering::Relaxed);
             }
+        }
+    }
+
+    /*
+    pub fn enqueue(&mut self, item: T) {
+        while (!self.try_enqueue(item)) {
+        }
+    }
+
+    pub fn dequeue(&mut self) -> T {
+        loop {
+            let result = self.try_dequeue();
+            if (result.is_some()) {
+                return result.unwrap();
+            }
+        }
+    }
+    */
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Queue;
+
+    static QUEUE_SIZE: usize = 1024usize;
+
+    #[test]
+    fn test_single_thread() {
+        let mut queue: Queue<usize> = Queue::new(QUEUE_SIZE);
+
+        for i in 0..QUEUE_SIZE as usize {
+            let success = queue.try_enqueue(i);
+            assert!(success);
+        }
+
+        for i in 0..QUEUE_SIZE as usize {
+            let value = queue.try_dequeue().unwrap();
+            assert_eq!(value, i);
         }
     }
 }
