@@ -1,17 +1,18 @@
 #![allow(dead_code)]
 
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::cell::UnsafeCell;
+use std::mem;
 
 struct Node<T> {
-    sequence: AtomicUsize,
-    data: Option<UnsafeCell<T>>
+    ticket: AtomicUsize,
+    data: Option<T>
 }
 
 impl<T> Node<T> {
-    fn new(sequence: usize) -> Node<T> {
+    fn new(ticket: usize) -> Node<T> {
         Node {
-            sequence: AtomicUsize::new(sequence),
+            ticket: AtomicUsize::new(ticket),
             data: None
         }
     }
@@ -43,10 +44,40 @@ impl<T> Queue<T> {
     }
 
     pub fn enqueue(&mut self, item: T) -> bool {
-        false
+        let mut index = self.enqueue_index.load(Ordering::Relaxed);
+        loop {
+            let mut cell = &self.buffer[index & self.mask];
+            let ticket = cell.ticket.load(Ordering::Acquire);
+            if ticket == index {
+                if index == self.enqueue_index.compare_and_swap(index, index + 1, Ordering::Relaxed) {
+                    mem::replace(cell.data, Some(item));
+                    cell.ticket.store(index + 1, Ordering::Relaxed);
+                    return true;
+                }
+            } else if ticket < index {
+                return false;
+            } else {
+                index = self.enqueue_index.load(Ordering::Relaxed);
+            }
+        }
     }
 
     pub fn dequeue(&mut self) -> Option<T> {
-        None
+        let mut index = self.dequeue_index.load(Ordering::Relaxed);
+        loop {
+            let cell = &self.buffer[index & self.mask];
+            let ticket = cell.ticket.load(Ordering::Acquire);
+            if ticket == index + 1 {
+                if index == self.dequeue_index.compare_and_swap(index, index + 1, Ordering::Relaxed) {
+                    let data = cell.data.take();
+                    cell.ticket.store(index + self.mask + 1, Ordering::Release);
+                    return data;
+                }
+            } else if ticket < index + 1 {
+                return None;
+            } else {
+                index = self.dequeue_index.load(Ordering::Relaxed);
+            }
+        }
     }
 }
