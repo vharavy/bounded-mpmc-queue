@@ -43,7 +43,7 @@ impl<T> Queue<T> {
         }
     }
 
-    pub fn try_enqueue(&mut self, item: T) -> bool {
+    pub fn try_enqueue(&mut self, item: T) -> Option<T> {
         let mut index = self.enqueue_index.load(Ordering::Relaxed);
         loop {
             let cell = &mut self.buffer[index & self.mask];
@@ -53,11 +53,11 @@ impl<T> Queue<T> {
                     unsafe {
                         *cell.data.get() = Some(item);
                     }
-                    cell.ticket.store(index + 1, Ordering::Relaxed);
-                    return true;
+                    cell.ticket.store(index + 1, Ordering::Release);
+                    return None;
                 }
             } else if ticket < index {
-                return false;
+                return Some(item);
             } else {
                 index = self.enqueue_index.load(Ordering::Relaxed);
             }
@@ -85,21 +85,17 @@ impl<T> Queue<T> {
         }
     }
 
-    /*
     pub fn enqueue(&mut self, item: T) {
-        while (!self.try_enqueue(item)) {
-        }
     }
 
     pub fn dequeue(&mut self) -> T {
         loop {
             let result = self.try_dequeue();
-            if (result.is_some()) {
+            if result.is_some() {
                 return result.unwrap();
             }
         }
     }
-    */
 }
 
 #[cfg(test)]
@@ -113,8 +109,8 @@ mod tests {
         let mut queue: Queue<usize> = Queue::new(QUEUE_SIZE);
 
         for i in 0..QUEUE_SIZE as usize {
-            let success = queue.try_enqueue(i);
-            assert!(success);
+            let result = queue.try_enqueue(i);
+            assert!(result.is_none());
         }
 
         for i in 0..QUEUE_SIZE as usize {
