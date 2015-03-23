@@ -16,7 +16,7 @@ impl<T> Node<T> {
 }
 
 pub struct Queue<T> {
-    buffer: Vec<Node<T>>,
+    nodes: Vec<Node<T>>,
     mask: usize,
     enqueue_index: AtomicUsize,
     dequeue_index: AtomicUsize
@@ -30,30 +30,30 @@ impl<T> Queue<T> {
         assert!(bound >= 2);
         assert_eq!(bound & (bound - 1), 0);
 
-        let mut buffer = Vec::with_capacity(bound);
+        let mut nodes = Vec::with_capacity(bound);
         for i in 0..bound {
-            buffer.push(Node::new(i));
+            nodes.push(Node::new(i));
         }
 
         Queue {
-            buffer: buffer,
+            nodes: nodes,
             mask: bound - 1,
             enqueue_index: AtomicUsize::new(0),
             dequeue_index: AtomicUsize::new(0)
         }
     }
 
-    pub fn try_enqueue(&mut self, item: T) -> Option<T> {
+    pub fn try_enqueue(&self, item: T) -> Option<T> {
         let mut index = self.enqueue_index.load(Ordering::Relaxed);
         loop {
-            let cell = &mut self.buffer[index & self.mask];
-            let ticket = cell.ticket.load(Ordering::Acquire);
+            let node = &self.nodes[index & self.mask];
+            let ticket = node.ticket.load(Ordering::Acquire);
             if ticket == index {
                 if index == self.enqueue_index.compare_and_swap(index, index + 1, Ordering::Relaxed) {
                     unsafe {
-                        *cell.data.get() = Some(item);
+                        *node.data.get() = Some(item);
                     }
-                    cell.ticket.store(index + 1, Ordering::Release);
+                    node.ticket.store(index + 1, Ordering::Release);
                     return None;
                 }
             } else if ticket < index {
@@ -64,17 +64,17 @@ impl<T> Queue<T> {
         }
     }
 
-    pub fn try_dequeue(&mut self) -> Option<T> {
+    pub fn try_dequeue(&self) -> Option<T> {
         let mut index = self.dequeue_index.load(Ordering::Relaxed);
         loop {
-            let cell = &self.buffer[index & self.mask];
-            let ticket = cell.ticket.load(Ordering::Acquire);
+            let node = &self.nodes[index & self.mask];
+            let ticket = node.ticket.load(Ordering::Acquire);
             if ticket == index + 1 {
                 if index == self.dequeue_index.compare_and_swap(index, index + 1, Ordering::Relaxed) {
                     let data = unsafe {
-                        (*cell.data.get()).take()
+                        (*node.data.get()).take()
                     };
-                    cell.ticket.store(index + self.mask + 1, Ordering::Release);
+                    node.ticket.store(index + self.mask + 1, Ordering::Release);
                     return data;
                 }
             } else if ticket < index + 1 {
@@ -85,14 +85,20 @@ impl<T> Queue<T> {
         }
     }
 
-    pub fn enqueue(&mut self, item: T) {
+    pub fn enqueue(&self, mut item: T) {
+        loop {
+            match self.try_enqueue(item) {
+                Some(value) => item = value,
+                None => return
+            }
+        }
     }
 
-    pub fn dequeue(&mut self) -> T {
+    pub fn dequeue(&self) -> T {
         loop {
-            let result = self.try_dequeue();
-            if result.is_some() {
-                return result.unwrap();
+            match self.try_dequeue() {
+                Some(value) => return value,
+                None => {},
             }
         }
     }
@@ -101,21 +107,68 @@ impl<T> Queue<T> {
 #[cfg(test)]
 mod tests {
     use super::Queue;
+    use std::thread;
+    use std::sync::{Arc, Barrier};
 
-    static QUEUE_SIZE: usize = 1024usize;
+    static QUEUE_SIZE: usize = 0x1000_usize;
+    static THREAD_COUNT: usize = 2;
+    static MESSAGE_COUNT: u64 = 0x100_0000_u64;
 
-    #[test]
-    fn test_single_thread() {
-        let mut queue: Queue<usize> = Queue::new(QUEUE_SIZE);
+    fn consumer(queue: &Queue<u64>) {
+        let mut sum = 0u64;
 
-        for i in 0..QUEUE_SIZE as usize {
-            let result = queue.try_enqueue(i);
-            assert!(result.is_none());
+        for _ in 0..MESSAGE_COUNT as u64 {
+            sum += queue.dequeue();
         }
 
-        for i in 0..QUEUE_SIZE as usize {
-            let value = queue.try_dequeue().unwrap();
-            assert_eq!(value, i);
+        println!("Consumer: {}", sum);
+    }
+
+    fn producer(queue: &Queue<u64>) {
+        let mut sum = 0u64;
+        for i in 0..MESSAGE_COUNT as u64 {
+            sum += i;
+            queue.enqueue(i);
+        }
+
+        println!("Producer: {}", sum);
+    }
+
+    #[test]
+    fn multiple_threads() {
+        let queue = Queue::new(QUEUE_SIZE);
+
+        let mut consumer_threads: Vec<_> = Vec::with_capacity(THREAD_COUNT);
+        let mut producer_threads: Vec<_> = Vec::with_capacity(THREAD_COUNT);
+
+        let barrier = Arc::new(Barrier::new(2 * THREAD_COUNT + 1));
+
+        for _ in 0..THREAD_COUNT {
+            let b = barrier.clone();
+            let q = &queue;
+            consumer_threads.push(thread::scoped(move || {
+                b.wait();
+                consumer(q);
+            }));
+        }
+
+        for _ in 0..THREAD_COUNT {
+            let b = barrier.clone();
+            let q = &queue;
+            producer_threads.push(thread::scoped(move || {
+                b.wait();
+                producer(q);
+            }));
+        }
+
+        barrier.wait();
+
+        for producer_thread in producer_threads {
+            producer_thread.join();
+        }
+
+        for consumer_thread in consumer_threads {
+            consumer_thread.join();
         }
     }
 }
