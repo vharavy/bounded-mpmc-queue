@@ -85,10 +85,11 @@ impl<T> Queue<T> {
         }
     }
 
-    pub fn enqueue(&self, mut item: T) {
+    pub fn enqueue(&self, item: T) {
+        let mut value = item;
         loop {
-            match self.try_enqueue(item) {
-                Some(value) => item = value,
+            match self.try_enqueue(value) {
+                Some(v) => value = v,
                 None => return
             }
         }
