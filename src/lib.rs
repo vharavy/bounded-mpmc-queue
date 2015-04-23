@@ -137,7 +137,7 @@ mod tests {
 
     #[test]
     fn multiple_threads() {
-        let queue = Queue::new(QUEUE_SIZE);
+        let queue = Arc::new(Queue::new(QUEUE_SIZE));
 
         let mut consumer_threads: Vec<_> = Vec::with_capacity(THREAD_COUNT);
         let mut producer_threads: Vec<_> = Vec::with_capacity(THREAD_COUNT);
@@ -146,30 +146,30 @@ mod tests {
 
         for _ in 0..THREAD_COUNT {
             let b = barrier.clone();
-            let q = &queue;
-            consumer_threads.push(thread::scoped(move || {
+            let q = queue.clone();
+            consumer_threads.push(thread::spawn(move || {
                 b.wait();
-                consumer(q);
+                consumer(&*q);
             }));
         }
 
         for _ in 0..THREAD_COUNT {
             let b = barrier.clone();
-            let q = &queue;
-            producer_threads.push(thread::scoped(move || {
+            let q = queue.clone();
+            producer_threads.push(thread::spawn(move || {
                 b.wait();
-                producer(q);
+                producer(&*q);
             }));
         }
 
         barrier.wait();
 
         for producer_thread in producer_threads {
-            producer_thread.join();
+            producer_thread.join().unwrap();
         }
 
         for consumer_thread in consumer_threads {
-            consumer_thread.join();
+            consumer_thread.join().unwrap();
         }
     }
 }
