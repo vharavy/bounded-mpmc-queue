@@ -107,8 +107,9 @@ impl<T> Queue<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::Queue;
+    use super::*;
     use std::thread;
+    use std::u64;
     use std::sync::{Arc, Barrier};
 
     static QUEUE_SIZE: usize = 0x1000_usize;
@@ -171,5 +172,35 @@ mod tests {
         for consumer_thread in consumer_threads {
             consumer_thread.join().unwrap();
         }
+    }
+
+    #[test]
+    fn ping_pong() {
+        let ping_producer = Arc::new(Queue::new(QUEUE_SIZE));
+        let ping_consumer = ping_producer.clone();
+
+        let pong_producer = Arc::new(Queue::new(QUEUE_SIZE));
+        let pong_consumer = pong_producer.clone();
+
+        let thread = thread::spawn(move || {
+            for i in 0..MESSAGE_COUNT {
+                let j = ping_consumer.dequeue();
+                if j == u64::MAX {
+                    break;
+                }
+
+                assert!(i == j);
+
+                pong_producer.enqueue(j);
+            }
+        });
+
+        for i in 0..MESSAGE_COUNT {
+            ping_producer.enqueue(i);
+            let j = pong_consumer.dequeue();
+            assert!(i == j);
+        }
+
+        thread.join().unwrap();
     }
 }
