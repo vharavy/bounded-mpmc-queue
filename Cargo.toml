@@ -1,5 +1,11 @@
 [package]
 
-name = "mpmc"
+name = "bounded-mpmc-queue"
 version = "0.0.1"
 authors = ["Vitali Haravy <HumaneProgrammer@gmail.com>"]
+
+[lib]
+name = "mpmc"
+test = true
+doctest = false
+
